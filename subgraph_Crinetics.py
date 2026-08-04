@@ -1046,7 +1046,9 @@ Dispense Table Rules:
 
     Any query related to patient dispenses must always be anchored to the Dispense table as the primary source.
     Refill Rate: Using crinetics_id as the anchor key within the Dispense table, determine how many patients who received a First Fill subsequently received at least one Refill, defaulting to a Life To Date (LTD) time period unless otherwise specified.
-
+    Hub Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity = 'IQVIA'
+    Paid Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity IN ('McKesson Biologics','Orsini') + SUM(number_of_bottles) from SD_Shipments WHERE claim_type = 'Paid'
+                
 SD_SHIPMENTS Rules: 
     Account-level dispense queries must always anchor to SD_Shipments, never Dispense, unless explicitly told otherwise.
 
@@ -1062,13 +1064,41 @@ Cross Tables Rules (ENROLLMENTS + SD_SHIPMENTS):
     Parent accounts activated = COUNT(DISTINCT parent_id) from the UNION of ENROLLMENT and SD_SHIPMENTS. Never filter this union down using enrollment-based conditions. Enrich via LEFT JOIN + COALESCE only — return NULL for unavailable attributes, never drop rows. No exceptions.
 
 Cross Tables Rules (Dispense + SD_SHIPMENTS):
-    Dispense contribution = always sum bottles_dispensed from BOTH `dispense` and `sd_shipments` tables, never one alone, then report % share of each against their combined total.
-    Always calculate bottles dispensed (and dispense growth) using the combined total from **both** the `Dispense` table and the `sd_shipments` table — never from just one alone.
-    Always use both SD_Shipments and Dispenses datasets together when computing any split of dispenses — never one alone.
-    Total Dispenses Calculation Rule (Mandatory):
-        Total Dispenses must always be calculated as the sum of:
-        bottles_dispensed from the Dispense table, plus
-        number_of_bottles from the SD_Shipments table
+    Dispense Contribution must always be computed using Hub Dispense and Paid Dispense components, and must always include Combined Dispense (Hub + Paid) as an explicit output column — never omitted, unless the user explicitly instructs otherwise.
+
+        Hub Dispense = bottles_dispensed from Dispense where shipping_entity = 'IQVIA'
+        Paid Dispense = bottles_dispensed from Dispense where shipping_entity IN ('McKesson Biologics','Orsini') + number_of_bottles from SD_Shipments where claim_type = 'Paid'
+        Combined Dispense = Hub Dispense + Paid Dispense
+
+        Contribution % must always be calculated against the matching national/total-level component — never against a single group's own combined total:
+
+        Hub Dispense % = Hub Dispense (for the group) / Total Hub Dispense (across all groups)
+        Paid Dispense % = Paid Dispense (for the group) / Total Paid Dispense (across all groups)
+        Combined Dispense % = Combined Dispense (for the group) / Total Combined Dispense (across all groups)
+
+        Each percentage must use its own matching denominator (Hub vs. Hub-total, Paid vs. Paid-total, Combined vs. Combined-total) — never cross-mixing components, and never computing a percentage against the group's own combined total (which would incorrectly always equal 100%).
+        Always calculate Bottles Dispensed as the sum of Hub Dispense (bottles_dispensed from Dispense where shipping_entity = 'IQVIA') and Paid Dispense (bottles_dispensed from Dispense where shipping_entity IN ('McKesson Biologics','Orsini') + number_of_bottles from SD_Shipments where claim_type = 'Paid'). Both bottle values and both growth numbers must always be shown independently, in addition to Combined — never a single blended number alone, unless explicitly instructed otherwise.
+            Hub Dispense (bottles)
+            Paid Dispense (bottles)
+            Combined Dispense (bottles) = Hub + Paid
+            Hub Growth % = % change in Hub Dispense period-over-period
+            Paid Growth % = % change in Paid Dispense period-over-period
+            Combined Growth % = % change in Combined Dispense period-over-period
+        Any split of dispenses must always default to Hub vs. Paid, computed from both Dispense and SD_Shipments together — never from one table alone, unless explicitly instructed otherwise.
+            Hub = bottles_dispensed from Dispense where shipping_entity = 'IQVIA'
+            Paid = bottles_dispensed from Dispense where shipping_entity IN ('McKesson Biologics','Orsini') + number_of_bottles from SD_Shipments where claim_type = 'Paid'
+        
+            If the user asks for a split by any other dimension (e.g., dosage form), that dimension must be applied as a secondary split within each of Hub and Paid independently — never replacing the Hub/Paid framework. Each dimension value must be broken out separately for both Hub and Paid, using the same source/filter logic above, with each dimension value filtered identically across both components (e.g., dosage = '40 mg' applied to both Hub and Paid calculations).
+            
+        Total Dispenses must always be displayed as two components — Hub Dispense and Paid Dispense — never as a single blended number, unless the user explicitly instructs otherwise.
+    
+            Hub Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity = 'IQVIA' (claim_type = 'Quickstart')
+            Paid Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity IN ('McKesson Biologics', 'Orsini') (claim_type = 'Paid')
+            + SUM(number_of_bottles) from SD_Shipments WHERE claim_type = 'Paid'
+    
+            Total Dispenses (only if explicitly requested) = Hub Dispense + Paid Dispense
+    
+            Required output fields: Hub Dispense, Paid Dispense (Total Dispenses shown only on explicit request).
 
 Cross Tables Rules (Enrollments + SD_SHIPMENTS + Paarent_Marketting_Target)
     To find any account segment (Top 63 or otherwise) not yet activated, anchor to the segment's parent_marketting_target list table plus ENROLLMENTS and SD_SHIPMENTS. Build the activated-accounts set as the union of parent_ids from ENROLLMENTS and SD_SHIPMENTS, then take the set difference: target list accounts from parent_marketting_target minus activated accounts. The remainder is the not-yet-activated list/count. Never compute this using only one or two of the three tables, and never substitute a different table for the segment's target/master list.
@@ -1086,7 +1116,6 @@ CALL_TABLE USAGE INSTRUCTIONS:
             To filter for Territory-level data, set geo_type = 'Territory'.
             To filter for Area-level data, set geo_type = 'Area'.
         Never filter call_stamped_territory_area alone without also constraining geo_type, since the same column holds mixed granularities and an unfiltered geo_type will mix Territory and Area values together.
-        "Interaction Type" and "Channel" refer to the same field.
 
 Query Handling Rules:
 
@@ -1103,8 +1132,7 @@ Query Handling Rules:
     - Calculation logic by geography level:
     - Territory:
         Step 1 — Build target HCP universe:
-            - From marketing_target_table, filter sam_focus = 'N'.
-            - Filter tier IN (1, 2, 3, 4).
+            - From marketing_target_table filter tier IN (1, 2, 3, 4).
             - Result: set of target hcp npi values, per territory.
 
         Step 2 — Identify reached HCPs:
@@ -1124,8 +1152,7 @@ Query Handling Rules:
 
     - Area:
         Step 1 — Build target HCP universe:
-            - From marketing_target_table, filter sam_focus = 'Y'.
-            - Filter tier IN (1, 2, 3, 4).
+            - From marketing_target_table filter tier IN (1, 2, 3, 4).
             - Result: set of target hcp npi values, per area.
 
         Step 2 — Identify reached HCPs:
@@ -1211,7 +1238,7 @@ Call Frequency:
 
     Territory:
 
-    Reached HCPs set = same as Reach → Territory, Step 2 (target universe from sam_focus = 'N', tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Territory' and time period, on hcp npi + territory, excluding non-target campus calls).
+    Reached HCPs set = same as Reach → Territory, Step 2 (target universe tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Territory' and time period, on hcp npi + territory, excluding non-target campus calls).
     Denominator = distinct count of hcp npi in that Reached HCPs set.
     Numerator = total count of calls (rows in call_data, channel-filtered per above) belonging to that same Reached HCPs set.
     Frequency = Numerator / Denominator.
@@ -1219,7 +1246,7 @@ Call Frequency:
 
     Area:
 
-    Reached HCPs set = same as Reach → Area, Step 2 (target universe from sam_focus = 'Y', tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Area' and time period, on hcp npi + area, excluding non-target campus calls).
+    Reached HCPs set = same as Reach → Area, Step 2 (target universe tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Area' and time period, on hcp npi + area, excluding non-target campus calls).
     Denominator = distinct count of hcp npi in that Reached HCPs set.
     Numerator = total count of calls (channel-filtered per above) belonging to that same Reached HCPs set.
     Frequency = Numerator / Denominator.
@@ -1256,6 +1283,7 @@ Important Constraints:
 Interpretation Rules:
 - "Coverage" → reach
 - If ambiguous, default to call-based interpretation and state assumption.
+
 
 Default Rules:
     If the user does not explicitly specify a total sales denominator, assume overall national sales as the default denominator.
@@ -1457,6 +1485,7 @@ Table SD_SHIPMENTS - Shipments from Specialty Distributor
 Table Dispense - Drug Dispense Data
 - crinetics_id (VARCHAR): internal Crinetics identifier
 - shipment_date (DATE): drug shipment date (YYYY-MM-DD)
+- shipping_entity (VARCHAR): Speciality Pharmacy Dispense (Paid) (Orsini, McKesson Biologics) Hub Dispense (IQVIA)
 - bottles_dispensed (NUMBER): number of bottles dispensed
 - run_count (VARCHAR): Indicates whether the dispense was the patient's initial shipment or a subsequent refill.Values: First Fill, Refill.
 - dosage (VARCHAR): Strength of the drug dispensed. values: 40 mg, 60 mg.
@@ -1683,7 +1712,9 @@ Dispense Table Rules:
 
     Any query related to patient dispenses must always be anchored to the Dispense table as the primary source.
     Refill Rate: Using crinetics_id as the anchor key within the Dispense table, determine how many patients who received a First Fill subsequently received at least one Refill, defaulting to a Life To Date (LTD) time period unless otherwise specified.
-
+    Hub Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity = 'IQVIA'
+    Paid Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity IN ('McKesson Biologics','Orsini') + SUM(number_of_bottles) from SD_Shipments WHERE claim_type = 'Paid'
+                
 SD_SHIPMENTS Rules: 
     Account-level dispense queries must always anchor to SD_Shipments, never Dispense, unless explicitly told otherwise.
 
@@ -1699,13 +1730,41 @@ Cross Tables Rules (ENROLLMENTS + SD_SHIPMENTS):
     Parent accounts activated = COUNT(DISTINCT parent_id) from the UNION of ENROLLMENT and SD_SHIPMENTS. Never filter this union down using enrollment-based conditions. Enrich via LEFT JOIN + COALESCE only — return NULL for unavailable attributes, never drop rows. No exceptions.
 
 Cross Tables Rules (Dispense + SD_SHIPMENTS):
-    Dispense contribution = always sum bottles_dispensed from BOTH `dispense` and `sd_shipments` tables, never one alone, then report % share of each against their combined total.
-    Always calculate bottles dispensed (and dispense growth) using the combined total from **both** the `Dispense` table and the `sd_shipments` table — never from just one alone.
-    Always use both SD_Shipments and Dispenses datasets together when computing any split of dispenses — never one alone.
-    Total Dispenses Calculation Rule (Mandatory):
-        Total Dispenses must always be calculated as the sum of:
-        bottles_dispensed from the Dispense table, plus
-        number_of_bottles from the SD_Shipments table
+    Dispense Contribution must always be computed using Hub Dispense and Paid Dispense components, and must always include Combined Dispense (Hub + Paid) as an explicit output column — never omitted, unless the user explicitly instructs otherwise.
+
+        Hub Dispense = bottles_dispensed from Dispense where shipping_entity = 'IQVIA'
+        Paid Dispense = bottles_dispensed from Dispense where shipping_entity IN ('McKesson Biologics','Orsini') + number_of_bottles from SD_Shipments where claim_type = 'Paid'
+        Combined Dispense = Hub Dispense + Paid Dispense
+
+        Contribution % must always be calculated against the matching national/total-level component — never against a single group's own combined total:
+
+        Hub Dispense % = Hub Dispense (for the group) / Total Hub Dispense (across all groups)
+        Paid Dispense % = Paid Dispense (for the group) / Total Paid Dispense (across all groups)
+        Combined Dispense % = Combined Dispense (for the group) / Total Combined Dispense (across all groups)
+
+        Each percentage must use its own matching denominator (Hub vs. Hub-total, Paid vs. Paid-total, Combined vs. Combined-total) — never cross-mixing components, and never computing a percentage against the group's own combined total (which would incorrectly always equal 100%).
+        Always calculate Bottles Dispensed as the sum of Hub Dispense (bottles_dispensed from Dispense where shipping_entity = 'IQVIA') and Paid Dispense (bottles_dispensed from Dispense where shipping_entity IN ('McKesson Biologics','Orsini') + number_of_bottles from SD_Shipments where claim_type = 'Paid'). Both bottle values and both growth numbers must always be shown independently, in addition to Combined — never a single blended number alone, unless explicitly instructed otherwise.
+            Hub Dispense (bottles)
+            Paid Dispense (bottles)
+            Combined Dispense (bottles) = Hub + Paid
+            Hub Growth % = % change in Hub Dispense period-over-period
+            Paid Growth % = % change in Paid Dispense period-over-period
+            Combined Growth % = % change in Combined Dispense period-over-period
+        Any split of dispenses must always default to Hub vs. Paid, computed from both Dispense and SD_Shipments together — never from one table alone, unless explicitly instructed otherwise.
+            Hub = bottles_dispensed from Dispense where shipping_entity = 'IQVIA'
+            Paid = bottles_dispensed from Dispense where shipping_entity IN ('McKesson Biologics','Orsini') + number_of_bottles from SD_Shipments where claim_type = 'Paid'
+        
+            If the user asks for a split by any other dimension (e.g., dosage form), that dimension must be applied as a secondary split within each of Hub and Paid independently — never replacing the Hub/Paid framework. Each dimension value must be broken out separately for both Hub and Paid, using the same source/filter logic above, with each dimension value filtered identically across both components (e.g., dosage = '40 mg' applied to both Hub and Paid calculations).
+            
+        Total Dispenses must always be displayed as two components — Hub Dispense and Paid Dispense — never as a single blended number, unless the user explicitly instructs otherwise.
+    
+            Hub Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity = 'IQVIA' (claim_type = 'Quickstart')
+            Paid Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity IN ('McKesson Biologics', 'Orsini') (claim_type = 'Paid')
+            + SUM(number_of_bottles) from SD_Shipments WHERE claim_type = 'Paid'
+    
+            Total Dispenses (only if explicitly requested) = Hub Dispense + Paid Dispense
+    
+            Required output fields: Hub Dispense, Paid Dispense (Total Dispenses shown only on explicit request).
 
 Cross Tables Rules (Enrollments + SD_SHIPMENTS + Paarent_Marketting_Target)
     To find any account segment (Top 63 or otherwise) not yet activated, anchor to the segment's parent_marketting_target list table plus ENROLLMENTS and SD_SHIPMENTS. Build the activated-accounts set as the union of parent_ids from ENROLLMENTS and SD_SHIPMENTS, then take the set difference: target list accounts from parent_marketting_target minus activated accounts. The remainder is the not-yet-activated list/count. Never compute this using only one or two of the three tables, and never substitute a different table for the segment's target/master list.
@@ -1723,7 +1782,6 @@ CALL_TABLE USAGE INSTRUCTIONS:
             To filter for Territory-level data, set geo_type = 'Territory'.
             To filter for Area-level data, set geo_type = 'Area'.
         Never filter call_stamped_territory_area alone without also constraining geo_type, since the same column holds mixed granularities and an unfiltered geo_type will mix Territory and Area values together.
-        "Interaction Type" and "Channel" refer to the same field.
 
 Query Handling Rules:
 
@@ -1740,8 +1798,7 @@ Query Handling Rules:
     - Calculation logic by geography level:
     - Territory:
         Step 1 — Build target HCP universe:
-            - From marketing_target_table, filter sam_focus = 'N'.
-            - Filter tier IN (1, 2, 3, 4).
+            - From marketing_target_table filter tier IN (1, 2, 3, 4).
             - Result: set of target hcp npi values, per territory.
 
         Step 2 — Identify reached HCPs:
@@ -1761,8 +1818,7 @@ Query Handling Rules:
 
     - Area:
         Step 1 — Build target HCP universe:
-            - From marketing_target_table, filter sam_focus = 'Y'.
-            - Filter tier IN (1, 2, 3, 4).
+            - From marketing_target_table filter tier IN (1, 2, 3, 4).
             - Result: set of target hcp npi values, per area.
 
         Step 2 — Identify reached HCPs:
@@ -1848,7 +1904,7 @@ Call Frequency:
 
     Territory:
 
-    Reached HCPs set = same as Reach → Territory, Step 2 (target universe from sam_focus = 'N', tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Territory' and time period, on hcp npi + territory, excluding non-target campus calls).
+    Reached HCPs set = same as Reach → Territory, Step 2 (target universe tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Territory' and time period, on hcp npi + territory, excluding non-target campus calls).
     Denominator = distinct count of hcp npi in that Reached HCPs set.
     Numerator = total count of calls (rows in call_data, channel-filtered per above) belonging to that same Reached HCPs set.
     Frequency = Numerator / Denominator.
@@ -1856,7 +1912,7 @@ Call Frequency:
 
     Area:
 
-    Reached HCPs set = same as Reach → Area, Step 2 (target universe from sam_focus = 'Y', tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Area' and time period, on hcp npi + area, excluding non-target campus calls).
+    Reached HCPs set = same as Reach → Area, Step 2 (target universe tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Area' and time period, on hcp npi + area, excluding non-target campus calls).
     Denominator = distinct count of hcp npi in that Reached HCPs set.
     Numerator = total count of calls (channel-filtered per above) belonging to that same Reached HCPs set.
     Frequency = Numerator / Denominator.
@@ -1864,7 +1920,7 @@ Call Frequency:
 
     POD:
 
-    Reached HCPs set = same as Reach → POD, Step 2 (target universe tier IN (1,2,3,4), joined to call_data filtered to time period, on hcp npi + pod, excluding non-target campus calls).
+    Reached HCPs set = same as Reach → POD, Step 2 (target universe tier IN (1,2,3,4)), joined to call_data filtered to time period, on hcp npi + pod, excluding non-target campus calls).
     Denominator = distinct count of hcp npi in that Reached HCPs set.
     Numerator = total count of calls (channel-filtered per above) belonging to that same Reached HCPs set.
     Frequency = Numerator / Denominator.
@@ -1872,7 +1928,7 @@ Call Frequency:
 
     Region:
 
-    Reached HCPs set = same as Reach → Region, Step 2 (target universe tier IN (1,2,3,4), joined to call_data filtered to time period, on hcp npi + region, excluding non-target campus calls).
+    Reached HCPs set = same as Reach → Region, Step 2 (target universe tier IN (1,2,3,4)), joined to call_data filtered to time period, on hcp npi + region, excluding non-target campus calls).
     Denominator = distinct count of hcp npi in that Reached HCPs set.
     Numerator = total count of calls (channel-filtered per above) belonging to that same Reached HCPs set.
     Frequency = Numerator / Denominator.
@@ -1880,7 +1936,7 @@ Call Frequency:
 
     Nation:
 
-    Reached HCPs set = same as Reach → Nation, Step 2 (target universe tier IN (1,2,3,4), joined to call_data filtered to time period, on hcp npi, excluding non-target campus calls).
+    Reached HCPs set = same as Reach → Nation, Step 2 (target universe tier IN (1,2,3,4)), joined to call_data filtered to time period, on hcp npi, excluding non-target campus calls).
     Denominator = distinct count of hcp npi in that Reached HCPs set.
     Numerator = total count of calls (channel-filtered per above) belonging to that same Reached HCPs set.
     Frequency = Numerator / Denominator.
@@ -2095,6 +2151,7 @@ Table SD_SHIPMENTS - Shipments from Specialty Distributor
 Table Dispense - Drug Dispense Data
 - crinetics_id (VARCHAR): internal Crinetics identifier
 - shipment_date (DATE): drug shipment date (YYYY-MM-DD)
+- shipping_entity (VARCHAR): Speciality Pharmacy Dispense (Paid) (Orsini, McKesson Biologics) Hub Dispense (IQVIA)
 - bottles_dispensed (NUMBER): number of bottles dispensed
 - run_count (VARCHAR): Indicates whether the dispense was the patient's initial shipment or a subsequent refill.Values: First Fill, Refill.
 - dosage (VARCHAR): Strength of the drug dispensed. values: 40 mg, 60 mg.
@@ -2370,10 +2427,12 @@ Dispense Table Rules:
 
     Any query related to patient dispenses must always be anchored to the Dispense table as the primary source.
     Refill Rate: Using crinetics_id as the anchor key within the Dispense table, determine how many patients who received a First Fill subsequently received at least one Refill, defaulting to a Life To Date (LTD) time period unless otherwise specified.
-
+    Hub Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity = 'IQVIA'
+    Paid Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity IN ('McKesson Biologics','Orsini') + SUM(number_of_bottles) from SD_Shipments WHERE claim_type = 'Paid'
+                
 SD_SHIPMENTS Rules: 
     Account-level dispense queries must always anchor to SD_Shipments, never Dispense, unless explicitly told otherwise.
-    
+
 Cross Table Rules (ENROLLMENTS + Dispense):
 
     Fill Rate: Using crinetics_id as the anchor key between the Enrollment and Dispense tables, determine how many enrolled patients received at least one dispense, defaulting to a Life To Date (LTD) time period unless otherwise specified.    
@@ -2386,15 +2445,43 @@ Cross Tables Rules (ENROLLMENTS + SD_SHIPMENTS):
     Parent accounts activated = COUNT(DISTINCT parent_id) from the UNION of ENROLLMENT and SD_SHIPMENTS. Never filter this union down using enrollment-based conditions. Enrich via LEFT JOIN + COALESCE only — return NULL for unavailable attributes, never drop rows. No exceptions.
 
 Cross Tables Rules (Dispense + SD_SHIPMENTS):
-    Dispense contribution = always sum bottles_dispensed from BOTH `dispense` and `sd_shipments` tables, never one alone, then report % share of each against their combined total.
-    Always calculate bottles dispensed (and dispense growth) using the combined total from **both** the `Dispense` table and the `sd_shipments` table — never from just one alone.
-    Always use both SD_Shipments and Dispenses datasets together when computing any split of dispenses — never one alone.
-    Total Dispenses Calculation Rule (Mandatory):
-        Total Dispenses must always be calculated as the sum of:
-        bottles_dispensed from the Dispense table, plus
-        number_of_bottles from the SD_Shipments table
+    Dispense Contribution must always be computed using Hub Dispense and Paid Dispense components, and must always include Combined Dispense (Hub + Paid) as an explicit output column — never omitted, unless the user explicitly instructs otherwise.
 
-Cross Tables Rules (Enrollments + SD_SHIPMENTS + Parent_Marketting_Target)
+        Hub Dispense = bottles_dispensed from Dispense where shipping_entity = 'IQVIA'
+        Paid Dispense = bottles_dispensed from Dispense where shipping_entity IN ('McKesson Biologics','Orsini') + number_of_bottles from SD_Shipments where claim_type = 'Paid'
+        Combined Dispense = Hub Dispense + Paid Dispense
+
+        Contribution % must always be calculated against the matching national/total-level component — never against a single group's own combined total:
+
+        Hub Dispense % = Hub Dispense (for the group) / Total Hub Dispense (across all groups)
+        Paid Dispense % = Paid Dispense (for the group) / Total Paid Dispense (across all groups)
+        Combined Dispense % = Combined Dispense (for the group) / Total Combined Dispense (across all groups)
+
+        Each percentage must use its own matching denominator (Hub vs. Hub-total, Paid vs. Paid-total, Combined vs. Combined-total) — never cross-mixing components, and never computing a percentage against the group's own combined total (which would incorrectly always equal 100%).
+        Always calculate Bottles Dispensed as the sum of Hub Dispense (bottles_dispensed from Dispense where shipping_entity = 'IQVIA') and Paid Dispense (bottles_dispensed from Dispense where shipping_entity IN ('McKesson Biologics','Orsini') + number_of_bottles from SD_Shipments where claim_type = 'Paid'). Both bottle values and both growth numbers must always be shown independently, in addition to Combined — never a single blended number alone, unless explicitly instructed otherwise.
+            Hub Dispense (bottles)
+            Paid Dispense (bottles)
+            Combined Dispense (bottles) = Hub + Paid
+            Hub Growth % = % change in Hub Dispense period-over-period
+            Paid Growth % = % change in Paid Dispense period-over-period
+            Combined Growth % = % change in Combined Dispense period-over-period
+        Any split of dispenses must always default to Hub vs. Paid, computed from both Dispense and SD_Shipments together — never from one table alone, unless explicitly instructed otherwise.
+            Hub = bottles_dispensed from Dispense where shipping_entity = 'IQVIA'
+            Paid = bottles_dispensed from Dispense where shipping_entity IN ('McKesson Biologics','Orsini') + number_of_bottles from SD_Shipments where claim_type = 'Paid'
+        
+            If the user asks for a split by any other dimension (e.g., dosage form), that dimension must be applied as a secondary split within each of Hub and Paid independently — never replacing the Hub/Paid framework. Each dimension value must be broken out separately for both Hub and Paid, using the same source/filter logic above, with each dimension value filtered identically across both components (e.g., dosage = '40 mg' applied to both Hub and Paid calculations).
+            
+        Total Dispenses must always be displayed as two components — Hub Dispense and Paid Dispense — never as a single blended number, unless the user explicitly instructs otherwise.
+    
+            Hub Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity = 'IQVIA' (claim_type = 'Quickstart')
+            Paid Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity IN ('McKesson Biologics', 'Orsini') (claim_type = 'Paid')
+            + SUM(number_of_bottles) from SD_Shipments WHERE claim_type = 'Paid'
+    
+            Total Dispenses (only if explicitly requested) = Hub Dispense + Paid Dispense
+    
+            Required output fields: Hub Dispense, Paid Dispense (Total Dispenses shown only on explicit request).
+
+Cross Tables Rules (Enrollments + SD_SHIPMENTS + Paarent_Marketting_Target)
     To find any account segment (Top 63 or otherwise) not yet activated, anchor to the segment's parent_marketting_target list table plus ENROLLMENTS and SD_SHIPMENTS. Build the activated-accounts set as the union of parent_ids from ENROLLMENTS and SD_SHIPMENTS, then take the set difference: target list accounts from parent_marketting_target minus activated accounts. The remainder is the not-yet-activated list/count. Never compute this using only one or two of the three tables, and never substitute a different table for the segment's target/master list.
 
 CALL_TABLE USAGE INSTRUCTIONS:
@@ -2404,14 +2491,12 @@ CALL_TABLE USAGE INSTRUCTIONS:
         For any query involving calls, call frequency, or call effort, filter channel to include only Face To Face, Phone, and Video — exclude Email by default.
         Only include Email if:
             The user explicitly asks to include it, or
-            The query involves grouping/breakdown by channel (e.g., "show calls by channel type"), in which case include all 4 values.
+            The query involves grouping/breakdown by channel_type (e.g., "show calls by channel type"), in which case include all 4 values.
 
         The column call_stamped_territory_area contains values for both Territory and Area — the geo_type column determines which one a row represents.
             To filter for Territory-level data, set geo_type = 'Territory'.
             To filter for Area-level data, set geo_type = 'Area'.
         Never filter call_stamped_territory_area alone without also constraining geo_type, since the same column holds mixed granularities and an unfiltered geo_type will mix Territory and Area values together.
-        "Interaction Type" and "Channel" refer to the same field.
-
 
 Query Handling Rules:
 
@@ -2428,8 +2513,7 @@ Query Handling Rules:
     - Calculation logic by geography level:
     - Territory:
         Step 1 — Build target HCP universe:
-            - From marketing_target_table, filter sam_focus = 'N'.
-            - Filter tier IN (1, 2, 3, 4).
+            - From marketing_target_table filter tier IN (1, 2, 3, 4).
             - Result: set of target hcp npi values, per territory.
 
         Step 2 — Identify reached HCPs:
@@ -2449,8 +2533,7 @@ Query Handling Rules:
 
     - Area:
         Step 1 — Build target HCP universe:
-            - From marketing_target_table, filter sam_focus = 'Y'.
-            - Filter tier IN (1, 2, 3, 4).
+            - From marketing_target_table filter tier IN (1, 2, 3, 4).
             - Result: set of target hcp npi values, per area.
 
         Step 2 — Identify reached HCPs:
@@ -2524,7 +2607,7 @@ Query Handling Rules:
             - Reach = Numerator / Denominator.
             - Exclude any hcp npi whose call was at a non-target campus from the numerator — a visit to an HCP at a campus outside the target list should not count as a reach.
 
-            Call Frequency:
+Call Frequency:
 
     Frequency = (total number of calls to reached target HCPs) / (distinct count of target HCP npi reached).
     The denominator (unique targets reached) is calculated exactly as the numerator in the Reach calculation for the corresponding geography level — i.e., reuse that same joined/filtered "Reached HCPs" set.
@@ -2536,7 +2619,7 @@ Query Handling Rules:
 
     Territory:
 
-    Reached HCPs set = same as Reach → Territory, Step 2 (target universe from sam_focus = 'N', tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Territory' and time period, on hcp npi + territory, excluding non-target campus calls).
+    Reached HCPs set = same as Reach → Territory, Step 2 (target universe tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Territory' and time period, on hcp npi + territory, excluding non-target campus calls).
     Denominator = distinct count of hcp npi in that Reached HCPs set.
     Numerator = total count of calls (rows in call_data, channel-filtered per above) belonging to that same Reached HCPs set.
     Frequency = Numerator / Denominator.
@@ -2544,7 +2627,7 @@ Query Handling Rules:
 
     Area:
 
-    Reached HCPs set = same as Reach → Area, Step 2 (target universe from sam_focus = 'Y', tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Area' and time period, on hcp npi + area, excluding non-target campus calls).
+    Reached HCPs set = same as Reach → Area, Step 2 (target universe tier IN (1,2,3,4), joined to call_data filtered to geo_type = 'Area' and time period, on hcp npi + area, excluding non-target campus calls).
     Denominator = distinct count of hcp npi in that Reached HCPs set.
     Numerator = total count of calls (channel-filtered per above) belonging to that same Reached HCPs set.
     Frequency = Numerator / Denominator.
@@ -2582,6 +2665,7 @@ Interpretation Rules:
 - "Coverage" → reach
 - If ambiguous, default to call-based interpretation and state assumption.
 
+
 Default Rules:
     If the user does not explicitly specify a total sales denominator, assume overall national sales as the default denominator.
     For growth metrics, if the previous period value is 0 and the current period value is greater than 0, the growth must be reported as 100%.
@@ -2595,7 +2679,6 @@ Default Rules:
     In tier, always group Non ENDOs with Discontinued Patients, ENDOs with Acro Diagnosed Patients, ENDOs with No Intelligence, Non ENDOs with Acro Diagnosed Patients, and ENDOs with Discontinued Patients into Non - Target. Keep Tier 1, Tier 2, Tier 3, Tier 4 as-is.
     For any Year-to-Date (YTD) calculation, the first week's start date must always be anchored to January 1st of the relevant year — never derived from the preceding week's end date or any other offset. All subsequent week boundaries follow normally from that anchor.
     For HCP-related attributes not tied to enrollments, dispense, or calls (e.g., number_of_treated_patients/potential, affiliated parent name, region, geography, tier, top_63 status, speciality), source the data from the marketing_target table.
-
 
 Time period Rules:
     LTD = Launch to Date; YTD = Year to Date; MTD = Month to Date; QTD = Quarter to Date.
@@ -2818,6 +2901,7 @@ Table SD_SHIPMENTS - Shipments from Specialty Distributor
 Table Dispense - Drug Dispense Data
 - crinetics_id (VARCHAR): internal Crinetics identifier
 - shipment_date (DATE): drug shipment date (YYYY-MM-DD)
+- shipping_entity (VARCHAR): Speciality Pharmacy Dispense (Paid) (Orsini, McKesson Biologics) Hub Dispense (IQVIA)
 - bottles_dispensed (NUMBER): number of bottles dispensed
 - run_count (VARCHAR): Indicates whether the dispense was the patient's initial shipment or a subsequent refill.Values: First Fill, Refill.
 - dosage (VARCHAR): Strength of the drug dispensed. values: 40 mg, 60 mg.
@@ -3083,6 +3167,7 @@ Table SD_SHIPMENTS - Shipments from Specialty Distributor
 Table Dispense - Drug Dispense Data
 - crinetics_id (VARCHAR): internal Crinetics identifier
 - shipment_date (DATE): drug shipment date (YYYY-MM-DD)
+- shipping_entity (VARCHAR): Speciality Pharmacy Dispense (Paid) (Orsini, McKesson Biologics) Hub Dispense (IQVIA)
 - bottles_dispensed (NUMBER): number of bottles dispensed
 - run_count (VARCHAR): Indicates whether the dispense was the patient's initial shipment or a subsequent refill.Values: First Fill, Refill.
 - dosage (VARCHAR): Strength of the drug dispensed. values: 40 mg, 60 mg.
