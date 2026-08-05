@@ -1044,7 +1044,8 @@ Enrollment Table Rules:
 
 Dispense Table Rules:    
 
-    Any query related to patient dispenses must always be anchored to the Dispense table as the primary source.
+    # HARD RULE: Patient-level dispense data comes from the Dispense table. Always.
+    # SD_SHIPMENTS must NEVER be used for patient dispense queries — no exceptions.
     Refill Rate: Using crinetics_id as the anchor key within the Dispense table, determine how many patients who received a First Fill subsequently received at least one Refill, defaulting to a Life To Date (LTD) time period unless otherwise specified.
     Hub Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity = 'IQVIA'
     Paid Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity IN ('McKesson Biologics','Orsini') + SUM(number_of_bottles) from SD_Shipments WHERE claim_type = 'Paid'
@@ -1286,6 +1287,8 @@ Interpretation Rules:
 
 
 Default Rules:
+    # HARD RULE: Patient counts / number of patients MUST use COUNT(DISTINCT crinetics_id).
+    # crinetics_id is the ONLY patient identifier. parent_id and child_id are NOT patient IDs
     If the user does not explicitly specify a total sales denominator, assume overall national sales as the default denominator.
     For growth metrics, if the previous period value is 0 and the current period value is greater than 0, the growth must be reported as 100%.
     Always accompany any growth metric or percentage value with the corresponding absolute volume value.
@@ -1408,7 +1411,7 @@ Table: ENROLLMENTS — patient enrollment and HCP engagement dataset (transactio
 - npi (NUMBER): National Provider Identifier (HCP unique ID)
 - hcp_name (VARCHAR): healthcare provider name
 - status (VARCHAR): enrollment or patient status
-- enrollment_source (VARCHAR): source/channel of enrollment
+- enrollment_source (VARCHAR): source/channel of enrollment (Hub - IQVIA, SP - Biologics, SP - Orsini)
 - dispensed_and_claim_type (VARCHAR): dispense and claim classification (Values: Yes - Paid, Yes - Quick Start, No)
 - tier (VARCHAR): HCP or account tier classification (Values: Tier 1, Tier 2, Tier 3, Tier 4, N)
 - primary_speciality (VARCHAR): primary medical specialty of HCP
@@ -1710,7 +1713,8 @@ Enrollment Table Rules:
 
 Dispense Table Rules:    
 
-    Any query related to patient dispenses must always be anchored to the Dispense table as the primary source.
+    # HARD RULE: Patient-level dispense data comes from the Dispense table. Always.
+    # SD_SHIPMENTS must NEVER be used for patient dispense queries — no exceptions.
     Refill Rate: Using crinetics_id as the anchor key within the Dispense table, determine how many patients who received a First Fill subsequently received at least one Refill, defaulting to a Life To Date (LTD) time period unless otherwise specified.
     Hub Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity = 'IQVIA'
     Paid Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity IN ('McKesson Biologics','Orsini') + SUM(number_of_bottles) from SD_Shipments WHERE claim_type = 'Paid'
@@ -1949,8 +1953,11 @@ Important Constraints:
 Interpretation Rules:
 - "Coverage" → reach
 - If ambiguous, default to call-based interpretation and state assumption.
-    
+
+
 Default Rules:
+    # HARD RULE: Patient counts / number of patients MUST use COUNT(DISTINCT crinetics_id).
+    # crinetics_id is the ONLY patient identifier. parent_id and child_id are NOT patient IDs
     If the user does not explicitly specify a total sales denominator, assume overall national sales as the default denominator.
     For growth metrics, if the previous period value is 0 and the current period value is greater than 0, the growth must be reported as 100%.
     Always accompany any growth metric or percentage value with the corresponding absolute volume value.
@@ -1963,7 +1970,7 @@ Default Rules:
     In tier, always group Non ENDOs with Discontinued Patients, ENDOs with Acro Diagnosed Patients, ENDOs with No Intelligence, Non ENDOs with Acro Diagnosed Patients, and ENDOs with Discontinued Patients into Non - Target. Keep Tier 1, Tier 2, Tier 3, Tier 4 as-is.
     For any Year-to-Date (YTD) calculation, the first week's start date must always be anchored to January 1st of the relevant year — never derived from the preceding week's end date or any other offset. All subsequent week boundaries follow normally from that anchor.
     For HCP-related attributes not tied to enrollments, dispense, or calls (e.g., number_of_treated_patients/potential, affiliated parent name, region, geography, tier, top_63 status, speciality), source the data from the marketing_target table.
-    
+
 
 Time period Rules:
     LTD = Launch to Date; YTD = Year to Date; MTD = Month to Date; QTD = Quarter to Date.
@@ -2074,7 +2081,7 @@ Table: ENROLLMENTS — patient enrollment and HCP engagement dataset (transactio
 - npi (NUMBER): National Provider Identifier (HCP unique ID)
 - hcp_name (VARCHAR): healthcare provider name
 - status (VARCHAR): enrollment or patient status
-- enrollment_source (VARCHAR): source/channel of enrollment
+- enrollment_source (VARCHAR): source/channel of enrollment (Hub - IQVIA, SP - Biologics, SP - Orsini)
 - dispensed_and_claim_type (VARCHAR): dispense and claim classification (Values: Yes - Paid, Yes - Quick Start, No)
 - tier (VARCHAR): HCP or account tier classification (Values: Tier 1, Tier 2, Tier 3, Tier 4, N)
 - primary_speciality (VARCHAR): primary medical specialty of HCP
@@ -2425,7 +2432,8 @@ Enrollment Table Rules:
 
 Dispense Table Rules:    
 
-    Any query related to patient dispenses must always be anchored to the Dispense table as the primary source.
+    # HARD RULE: Patient-level dispense data comes from the Dispense table. Always.
+    # SD_SHIPMENTS must NEVER be used for patient dispense queries — no exceptions.
     Refill Rate: Using crinetics_id as the anchor key within the Dispense table, determine how many patients who received a First Fill subsequently received at least one Refill, defaulting to a Life To Date (LTD) time period unless otherwise specified.
     Hub Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity = 'IQVIA'
     Paid Dispense = SUM(bottles_dispensed) from Dispense WHERE shipping_entity IN ('McKesson Biologics','Orsini') + SUM(number_of_bottles) from SD_Shipments WHERE claim_type = 'Paid'
@@ -2667,6 +2675,8 @@ Interpretation Rules:
 
 
 Default Rules:
+    # HARD RULE: Patient counts / number of patients MUST use COUNT(DISTINCT crinetics_id).
+    # crinetics_id is the ONLY patient identifier. parent_id and child_id are NOT patient IDs
     If the user does not explicitly specify a total sales denominator, assume overall national sales as the default denominator.
     For growth metrics, if the previous period value is 0 and the current period value is greater than 0, the growth must be reported as 100%.
     Always accompany any growth metric or percentage value with the corresponding absolute volume value.
@@ -2824,7 +2834,7 @@ Table: ENROLLMENTS — patient enrollment and HCP engagement dataset (transactio
 - npi (NUMBER): National Provider Identifier (HCP unique ID)
 - hcp_name (VARCHAR): healthcare provider name
 - status (VARCHAR): enrollment or patient status
-- enrollment_source (VARCHAR): source/channel of enrollment
+- enrollment_source (VARCHAR): source/channel of enrollment (Hub - IQVIA, SP - Biologics, SP - Orsini)
 - dispensed_and_claim_type (VARCHAR): dispense and claim classification (Values: Yes - Paid, Yes - Quick Start, No)
 - tier (VARCHAR): HCP or account tier classification (Values: Tier 1, Tier 2, Tier 3, Tier 4, N)
 - primary_speciality (VARCHAR): primary medical specialty of HCP
@@ -3090,7 +3100,7 @@ Table: ENROLLMENTS — patient enrollment and HCP engagement dataset (transactio
 - npi (NUMBER): National Provider Identifier (HCP unique ID)
 - hcp_name (VARCHAR): healthcare provider name
 - status (VARCHAR): enrollment or patient status
-- enrollment_source (VARCHAR): source/channel of enrollment
+- enrollment_source (VARCHAR): source/channel of enrollment (Hub - IQVIA, SP - Biologics, SP - Orsini)
 - dispensed_and_claim_type (VARCHAR): dispense and claim classification (Values: Yes - Paid, Yes - Quick Start, No)
 - tier (VARCHAR): HCP or account tier classification (Values: Tier 1, Tier 2, Tier 3, Tier 4, N)
 - primary_speciality (VARCHAR): primary medical specialty of HCP
@@ -3955,7 +3965,7 @@ Table: ENROLLMENTS — patient enrollment and HCP engagement dataset (transactio
 - npi (NUMBER): National Provider Identifier (HCP unique ID)
 - hcp_name (VARCHAR): healthcare provider name
 - status (VARCHAR): enrollment or patient status
-- enrollment_source (VARCHAR): source/channel of enrollment
+- enrollment_source (VARCHAR): source/channel of enrollment (Hub - IQVIA, SP - Biologics, SP - Orsini)
 - dispensed_and_claim_type (VARCHAR): dispense and claim classification (Values: Yes - Paid, Yes - Quick Start, No)
 - tier (VARCHAR): HCP or account tier classification (Values: Tier 1, Tier 2, Tier 3, Tier 4, N)
 - primary_speciality (VARCHAR): primary medical specialty of HCP
@@ -4483,7 +4493,7 @@ Table: ENROLLMENTS — patient enrollment and HCP engagement dataset (transactio
 - npi (NUMBER): National Provider Identifier (HCP unique ID)
 - hcp_name (VARCHAR): healthcare provider name
 - status (VARCHAR): enrollment or patient status
-- enrollment_source (VARCHAR): source/channel of enrollment
+- enrollment_source (VARCHAR): source/channel of enrollment (Hub - IQVIA, SP - Biologics, SP - Orsini)
 - dispensed_and_claim_type (VARCHAR): dispense and claim classification (Values: Yes - Paid, Yes - Quick Start, No)
 - tier (VARCHAR): HCP or account tier classification (Values: Tier 1, Tier 2, Tier 3, Tier 4, N)
 - primary_speciality (VARCHAR): primary medical specialty of HCP

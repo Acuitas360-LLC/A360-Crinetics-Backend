@@ -78,6 +78,7 @@ def load_masking_table(table_name: str = "MASK_MAPPING") -> dict:
 
 # Define your fallback column priority order here
 COLUMN_FALLBACK_ORDER = [
+    "shipping_entity",
     "region",
     "area",
     "territory", 
